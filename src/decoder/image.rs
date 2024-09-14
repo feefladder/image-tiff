@@ -203,6 +203,7 @@ impl<K: TiffKind> Image<K> {
         let planes = match planar_config {
             PlanarConfiguration::Chunky => 1,
             PlanarConfiguration::Planar => samples,
+            PlanarConfiguration::Unknown(_) => unreachable!(),
         };
 
         let chunk_type;
@@ -372,6 +373,11 @@ impl<K: TiffKind> Image<K> {
                     vec![self.bits_per_sample; self.samples as usize],
                 ),
             )),
+            PhotometricInterpretation::Unknown(_) => Err(TiffError::UnsupportedError(
+                TiffUnsupportedError::UnsupportedPhotometricInterpretation(
+                    self.photometric_interpretation,
+                ),
+            )),
         }
     }
 
@@ -474,6 +480,7 @@ impl<K: TiffKind> Image<K> {
         match self.planar_config {
             PlanarConfiguration::Chunky => self.samples.into(),
             PlanarConfiguration::Planar => 1,
+            PlanarConfiguration::Unknown(_) => unreachable!(),
         }
     }
 
@@ -482,6 +489,7 @@ impl<K: TiffKind> Image<K> {
         match self.planar_config {
             PlanarConfiguration::Chunky => 1,
             PlanarConfiguration::Planar => self.samples.into(),
+            PlanarConfiguration::Unknown(_) => unreachable!(),
         }
     }
 
@@ -598,6 +606,11 @@ impl<K: TiffKind> Image<K> {
                         TiffUnsupportedError::FloatingPointPredictor(color_type),
                     ));
                 }
+                Predictor::Unknown(code) => {
+                    return Err(TiffError::FormatError(TiffFormatError::UnknownPredictor(
+                        code,
+                    )));
+                }
             },
             type_ => {
                 return Err(TiffError::UnsupportedError(
@@ -674,7 +687,7 @@ impl<K: TiffKind> Image<K> {
                     samples,
                     byte_order,
                     predictor,
-                );
+                )?;
             }
             if photometric_interpretation == PhotometricInterpretation::WhiteIsZero {
                 super::invert_colors(tile, color_type, self.sample_format);
@@ -719,7 +732,7 @@ impl<K: TiffKind> Image<K> {
                     samples,
                     byte_order,
                     predictor,
-                );
+                )?;
                 if photometric_interpretation == PhotometricInterpretation::WhiteIsZero {
                     super::invert_colors(row, color_type, self.sample_format);
                 }
