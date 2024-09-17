@@ -13,6 +13,17 @@ pub(crate) struct AsyncTagReader<'a, R: AsyncRead + AsyncSeek + Unpin + Send> {
     pub bigtiff: bool,
 }
 impl<'a, R: AsyncRead + AsyncSeek + Unpin + Send> AsyncTagReader<'a, R> {
+    /// finds a tag, where the value may be a raw offset
+    pub(crate) fn find_tag_maybe_val(&mut self, tag: Tag) -> TiffResult<Option<Value>> {
+        Ok(match self.ifd.get(&tag) {
+            Some(entry) => Some(
+                entry
+                .clone()
+                .maybe_val(self.bigtiff, self.reader.byte_order)?
+            ),
+            None => None  
+        })
+    }
     pub(crate) async fn find_tag(&mut self, tag: Tag) -> TiffResult<Option<Value>> {
         Ok(match self.ifd.get(&tag) {
             Some(entry) => Some(

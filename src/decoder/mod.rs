@@ -139,6 +139,21 @@ impl DecodingResult {
             DecodingResult::I64(ref mut buf) => DecodingBuffer::I64(&mut buf[start..]),
         }
     }
+
+    pub fn len(&self) -> usize {
+        match self {
+            DecodingResult::U8(v) => v.len(),
+            DecodingResult::U16(v) => v.len(),
+            DecodingResult::U32(v) => v.len(),
+            DecodingResult::U64(v) => v.len(),
+            DecodingResult::F32(v) => v.len(),
+            DecodingResult::F64(v) => v.len(),
+            DecodingResult::I8(v) => v.len(),
+            DecodingResult::I16(v) => v.len(),
+            DecodingResult::I32(v) => v.len(),
+            DecodingResult::I64(v) => v.len(),
+        }
+    }
 }
 
 // A buffer for image decoding

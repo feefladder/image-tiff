@@ -1,6 +1,8 @@
 //! Function for reading TIFF tags
 
+use core::hash;
 use std::collections::HashMap;
+use std::hash::Hash;
 use std::io::{self, Read, Seek};
 use std::mem;
 use std::str;
@@ -36,6 +38,7 @@ pub enum Value {
     Ascii(String),
     Ifd(u32),
     IfdBig(u64),
+    Offset([u8;8]),
 }
 
 impl Value {
@@ -297,6 +300,65 @@ impl Value {
             )),
         }
     }
+
+    pub fn into_u64_hashmap<T>(self) -> TiffResult<HashMap<T, u64>> 
+    where 
+        T: Hash + Eq + TryFrom<usize>,
+        <T as TryFrom<usize>>::Error: std::fmt::Debug,
+    {
+        match self {
+            List(vec) => {
+                let mut new_vec = HashMap::with_capacity(vec.len());
+                for (i, v) in vec.into_iter().enumerate() {
+                    new_vec.insert(T::try_from(i).unwrap(), v.into_u64()?);
+                }
+                Ok(new_vec)
+            }
+            Unsigned(val) => {
+                let mut hashmap = HashMap::new();
+                hashmap.insert(T::try_from(0).unwrap(), u64::from(val));
+                Ok(hashmap)
+            },
+            UnsignedBig(val) => {
+                let mut hashmap = HashMap::new();
+                hashmap.insert(T::try_from(0).unwrap(), u64::from(val));
+                Ok(hashmap)
+            },
+            Rational(numerator, denominator) => {
+                let mut hashmap = HashMap::new();
+                hashmap.insert(T::try_from(0).unwrap(), u64::from(numerator));
+                hashmap.insert(T::try_from(1).unwrap(), u64::from(denominator));
+                Ok(hashmap)
+            },
+            RationalBig(numerator, denominator) => {
+                let mut hashmap = HashMap::new();
+                hashmap.insert(T::try_from(0).unwrap(), u64::from(numerator));
+                hashmap.insert(T::try_from(1).unwrap(), u64::from(denominator));
+                Ok(hashmap)
+            },
+            Ifd(val) => {
+                let mut hashmap = HashMap::new();
+                hashmap.insert(T::try_from(0).unwrap(), u64::from(val));
+                Ok(hashmap)
+            },
+            IfdBig(val) => {
+                let mut hashmap = HashMap::new();
+                hashmap.insert(T::try_from(0).unwrap(), u64::from(val));
+                Ok(hashmap)
+            },
+            Ascii(val) => {
+                let mut hashmap = HashMap::new();
+                for (i, v) in val.chars().map(u32::from).map(u64::from).enumerate() {
+                    hashmap.insert(T::try_from(i).unwrap(), v);
+                }
+                Ok(hashmap)
+            },
+            Value::Offset(_) => Ok(HashMap::new()),
+            val => Err(TiffError::FormatError(
+                TiffFormatError::UnsignedIntegerExpected(val),
+            )),
+        }
+    } 
 
     pub fn into_i64_vec(self) -> TiffResult<Vec<i64>> {
         match self {

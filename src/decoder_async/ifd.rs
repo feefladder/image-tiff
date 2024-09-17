@@ -1,6 +1,6 @@
 use crate::decoder_async::stream::AsyncSmartReader;
 use crate::tags::Type;
-pub use crate::{
+use crate::{
     decoder::{
         ifd::Value::{
             self, Ascii, Byte, Double, Float, Ifd, IfdBig, List, Rational, RationalBig, SRational,
@@ -123,10 +123,10 @@ impl Entry {
     }
 
     /// Get the tags value if it fits in the Value field.
-    pub fn maybe_val(&self, bigtiff: bool, byte_order: ByteOrder) -> TiffResult<Option<Value>> {
+    pub fn maybe_val(&self, bigtiff: bool, byte_order: ByteOrder) -> TiffResult<Value> {
         // Case 1: there are no values so we can return immediately.
         if self.count == 0 {
-            return Ok(Some(List(Vec::new())));
+            return Ok(List(Vec::new()));
         }
 
         let bo = byte_order;
@@ -134,14 +134,14 @@ impl Entry {
         let value_bytes = self.num_value_bytes()?;
 
         if value_bytes > 8 || (!bigtiff && value_bytes > 4) {
-            return Ok(None);
+            return Ok(Value::Offset(self.offset));
         }
 
         // Case 2: there is one value.
         if self.count == 1 {
             // 2a: the value is 5-8 bytes and we're in BigTiff mode.
             if bigtiff && value_bytes > 4 && value_bytes <= 8 {
-                return Ok(Some(match self.type_ {
+                return Ok(match self.type_ {
                     Type::LONG8 => UnsignedBig(self.r(bo).read_u64()?),
                     Type::SLONG8 => SignedBig(self.r(bo).read_i64()?),
                     Type::DOUBLE => Double(self.r(bo).read_f64()?),
@@ -164,27 +164,27 @@ impl Entry {
                     | Type::SLONG
                     | Type::FLOAT
                     | Type::IFD => unreachable!(),
-                }));
+                });
             }
 
             // 2b: the value is at most 4 bytes or doesn't fit in the offset field.
             return Ok(match self.type_ {
-                Type::BYTE => Some(Unsigned(u32::from(self.offset[0]))),
-                Type::SBYTE => Some(Signed(i32::from(self.offset[0] as i8))),
-                Type::UNDEFINED => Some(Byte(self.offset[0])),
-                Type::SHORT => Some(Unsigned(u32::from(self.r(bo).read_u16()?))),
-                Type::SSHORT => Some(Signed(i32::from(self.r(bo).read_i16()?))),
-                Type::LONG => Some(Unsigned(self.r(bo).read_u32()?)),
-                Type::SLONG => Some(Signed(self.r(bo).read_i32()?)),
-                Type::FLOAT => Some(Float(self.r(bo).read_f32()?)),
+                Type::BYTE => Unsigned(u32::from(self.offset[0])),
+                Type::SBYTE => Signed(i32::from(self.offset[0] as i8)),
+                Type::UNDEFINED => Byte(self.offset[0]),
+                Type::SHORT => Unsigned(u32::from(self.r(bo).read_u16()?)),
+                Type::SSHORT => Signed(i32::from(self.r(bo).read_i16()?)),
+                Type::LONG => Unsigned(self.r(bo).read_u32()?),
+                Type::SLONG => Signed(self.r(bo).read_i32()?),
+                Type::FLOAT => Float(self.r(bo).read_f32()?),
                 Type::ASCII => {
                     if self.offset[0] == 0 {
-                        Some(Ascii("".to_string()))
+                        Ascii("".to_string())
                     } else {
                         return Err(TiffError::FormatError(TiffFormatError::InvalidTag));
                     }
                 }
-                Type::IFD => Some(Ifd(self.r(bo).read_u32()?)),
+                Type::IFD => Ifd(self.r(bo).read_u32()?),
                 _ => unreachable!("This should have been caught earlier"),
             });
         }
@@ -192,26 +192,26 @@ impl Entry {
         // Case 3: There is more than one value, but it fits in the offset field.
         if value_bytes <= 4 || bigtiff && value_bytes <= 8 {
             match self.type_ {
-                Type::BYTE => return Ok(Some(offset_to_bytes(self.count as usize, self))),
-                Type::SBYTE => return Ok(Some(offset_to_sbytes(self.count as usize, self))),
+                Type::BYTE => return Ok(offset_to_bytes(self.count as usize, self)),
+                Type::SBYTE => return Ok(offset_to_sbytes(self.count as usize, self)),
                 Type::ASCII => {
                     let mut buf = vec![0; self.count as usize];
                     self.r(bo).read_exact(&mut buf)?;
                     if buf.is_ascii() && buf.ends_with(&[0]) {
                         let v = std::str::from_utf8(&buf)?;
                         let v = v.trim_matches(char::from(0));
-                        return Ok(Some(Ascii(v.into())));
+                        return Ok(Ascii(v.into()));
                     } else {
                         return Err(TiffError::FormatError(TiffFormatError::InvalidTag));
                     }
                 }
                 Type::UNDEFINED => {
-                    return Ok(Some(List(
+                    return Ok(List(
                         self.offset[0..self.count as usize]
                             .iter()
                             .map(|&b| Byte(b))
                             .collect(),
-                    )));
+                    ));
                 }
                 Type::SHORT => {
                     let mut r = self.r(bo);
@@ -219,7 +219,7 @@ impl Entry {
                     for _ in 0..self.count {
                         v.push(Short(r.read_u16()?));
                     }
-                    return Ok(Some(List(v)));
+                    return Ok(List(v));
                 }
                 Type::SSHORT => {
                     let mut r = self.r(bo);
@@ -227,7 +227,7 @@ impl Entry {
                     for _ in 0..self.count {
                         v.push(Signed(i32::from(r.read_i16()?)));
                     }
-                    return Ok(Some(List(v)));
+                    return Ok(List(v));
                 }
                 Type::LONG => {
                     let mut r = self.r(bo);
@@ -235,7 +235,7 @@ impl Entry {
                     for _ in 0..self.count {
                         v.push(Unsigned(r.read_u32()?));
                     }
-                    return Ok(Some(List(v)));
+                    return Ok(List(v));
                 }
                 Type::SLONG => {
                     let mut r = self.r(bo);
@@ -243,7 +243,7 @@ impl Entry {
                     for _ in 0..self.count {
                         v.push(Signed(r.read_i32()?));
                     }
-                    return Ok(Some(List(v)));
+                    return Ok(List(v));
                 }
                 Type::FLOAT => {
                     let mut r = self.r(bo);
@@ -251,7 +251,7 @@ impl Entry {
                     for _ in 0..self.count {
                         v.push(Float(r.read_f32()?));
                     }
-                    return Ok(Some(List(v)));
+                    return Ok(List(v));
                 }
                 Type::IFD => {
                     let mut r = self.r(bo);
@@ -259,7 +259,7 @@ impl Entry {
                     for _ in 0..self.count {
                         v.push(Ifd(r.read_u32()?));
                     }
-                    return Ok(Some(List(v)));
+                    return Ok(List(v));
                 }
                 Type::LONG8
                 | Type::SLONG8
@@ -287,7 +287,7 @@ impl Entry {
     ) -> TiffResult<Value> {
         if self.num_value_bytes()? <= 4 || (self.num_value_bytes()? <= 8 && bigtiff) {
             // return Err(TiffError::UsageError("Should not call nth val on a value that is in the Value tag field"));
-            panic!("Should not call this function if bla")
+            panic!("Should not call this function if value fits inside value field")
         }
         if n > self.count {
             return Err(TiffError::LimitsExceeded);
@@ -298,8 +298,26 @@ impl Entry {
         } else {
             self.r(bo).read_u32()?.into()
         };
-        reader.goto_offset(offset + n * self.type_size()).await?;
-        Ok(UnsignedBig(reader.read_u64().await?))
+        reader.goto_offset(offset + n*self.type_size()).await?;
+        // let res = reader.read_u64().await?;
+
+        Ok(match self.type_ {
+            // Type::ASCII => Ascii(reader.read)
+            // Type::BYTE => Byte(reader.))
+            Type::SBYTE => SignedByte(reader.read_i8().await?),
+            Type::SSHORT => SignedShort(reader.read_i16().await?),
+            Type::SLONG => Signed(reader.read_i32().await?),
+            Type::SLONG8 => SignedBig(reader.read_i64().await?),
+            Type::SHORT => Short(reader.read_u16().await?),
+            Type::LONG => Unsigned(reader.read_u32().await?),
+            Type::LONG8 => UnsignedBig(reader.read_u64().await?),
+            _ => {return Err(TiffError::UnsupportedError(crate::TiffUnsupportedError::UnsupportedDataType));}
+        })
+        // let buf = reader.read_range(offset + n * self.type_size(), offset + (n+1)*self.type_size()).await?;
+        // let mut synr = SmartReader::wrap(Cursor::new(buf), bo);
+        // let res = synr.read_u64()?;
+        // println!("read {:?} from offset {:?} + {:?}*{:?}", res, offset, n,self.type_size());
+        // Ok(UnsignedBig(res))
     }
 
     /// get the tags value, if it doesn't fit, it will read the pointer.  
@@ -313,18 +331,18 @@ impl Entry {
         let bo = reader.byte_order();
 
         // The number of bytes our value takes up
-        let value_bytes = self.num_value_bytes()?;
         let offset = if bigtiff {
             self.r(bo).read_u64()?
         } else {
             self.r(bo).read_u32()?.into()
         };
-        // case 1: the value fits in the value field
-        if let Some(maybe_val) = self.maybe_val(bigtiff, bo)? {
-            return Ok(maybe_val);
+        // case 1: the value fits in the value fiel            Type::d
+        match self.maybe_val(bigtiff, bo)? {
+            Value::Offset(_) => {},
+            val => {return Ok(val)},
         }
 
-        // Case 2: there is one value. This only
+        // Case 2: there is one value. This only happens in smalltiff
         if self.count == 1 {
             // 2b: the value is at most 4 bytes or doesn't fit in the offset field.
             return Ok(match self.type_ {
@@ -358,135 +376,70 @@ impl Entry {
 
         // TODO: find out if this is actually faster (I think it is...)
         // initialize the buffer with all tag data inside it
-        // let buf = reader.read_range(offset, offset + self.count * self.type_size()).await?;
-        // let synr = SmartReader::wrap(Cursor::new(buf), bo);
-
-        // Case 4: there is more than one value, and it doesn't fit in the offset field.
-        // Async help found here: https://users.rust-lang.org/t/function-that-takes-an-async-closure/61663
+        let buf = reader.read_range(offset, offset + self.count * self.type_size()).await?;
+        let mut synr = SmartReader::wrap(Cursor::new(buf), bo);
         match self.type_ {
             // TODO check if this could give wrong results
             // at a different endianess of file/computer.
-            Type::BYTE => {
-                self.decode_offset(self.count, bo, bigtiff, limits, reader, |reader| {
-                    async move {
-                        let mut buf = [0; 1];
-                        reader.read_exact(&mut buf).await?;
-                        Ok(UnsignedBig(u64::from(buf[0])))
-                    }
-                    .boxed()
-                })
-                .await
-            }
-            Type::SBYTE => {
-                self.decode_offset(self.count, bo, bigtiff, limits, reader, |reader| {
-                    async move { Ok(SignedBig(i64::from(reader.read_i8().await?))) }.boxed()
-                })
-                .await
-            }
-            Type::SHORT => {
-                self.decode_offset(self.count, bo, bigtiff, limits, reader, |reader| {
-                    async move { Ok(UnsignedBig(u64::from(reader.read_u16().await?))) }.boxed()
-                })
-                .await
-            }
-            Type::SSHORT => {
-                self.decode_offset(self.count, bo, bigtiff, limits, reader, |reader| {
-                    async move { Ok(SignedBig(i64::from(reader.read_i16().await?))) }.boxed()
-                })
-                .await
-            }
-            Type::LONG => {
-                self.decode_offset(self.count, bo, bigtiff, limits, reader, |reader| {
-                    async move { Ok(Unsigned(reader.read_u32().await?)) }.boxed()
-                })
-                .await
-            }
-            Type::SLONG => {
-                self.decode_offset(self.count, bo, bigtiff, limits, reader, |reader| {
-                    async move { Ok(Signed(reader.read_i32().await?)) }.boxed()
-                })
-                .await
-            }
-            Type::FLOAT => {
-                self.decode_offset(self.count, bo, bigtiff, limits, reader, |reader| {
-                    async move { Ok(Float(reader.read_f32().await?)) }.boxed()
-                })
-                .await
-            }
-            Type::DOUBLE => {
-                self.decode_offset(self.count, bo, bigtiff, limits, reader, |reader| {
-                    async move { Ok(Double(reader.read_f64().await?)) }.boxed()
-                })
-                .await
-            }
+            Type::BYTE => self.decode_vals(self.count, bo, bigtiff, limits, &mut synr, |synr| {
+                let mut buf = [0; 1];
+                synr.read_exact(&mut buf)?;
+                Ok(UnsignedBig(u64::from(buf[0])))
+            }),
+            Type::SBYTE => self.decode_vals(self.count, bo, bigtiff, limits, &mut synr, |synr| {
+                Ok(SignedBig(i64::from(synr.read_i8()?)))
+            }),
+            Type::SHORT => self.decode_vals(self.count, bo, bigtiff, limits, &mut synr, |synr| {
+                Ok(UnsignedBig(u64::from(synr.read_u16()?)))
+            }),
+            Type::SSHORT => self.decode_vals(self.count, bo, bigtiff, limits, &mut synr, |synr| {
+                Ok(SignedBig(i64::from(synr.read_i16()?)))
+            }),
+            Type::LONG => self.decode_vals(self.count, bo, bigtiff, limits, &mut synr, |synr| {
+                Ok(Unsigned(synr.read_u32()?))
+            }),
+            Type::SLONG => self.decode_vals(self.count, bo, bigtiff, limits, &mut synr, |synr| {
+                Ok(Signed(synr.read_i32()?))
+            }),
+            Type::FLOAT => self.decode_vals(self.count, bo, bigtiff, limits, &mut synr, |synr| {
+                Ok(Float(synr.read_f32()?))
+            }),
+            Type::DOUBLE => self.decode_vals(self.count, bo, bigtiff, limits, &mut synr, |synr| {
+                Ok(Double(synr.read_f64()?))
+            }),
             Type::RATIONAL => {
-                self.decode_offset(self.count, bo, bigtiff, limits, reader, |reader| {
-                    async move { Ok(Rational(reader.read_u32().await?, reader.read_u32().await?)) }
-                        .boxed()
+                self.decode_vals(self.count, bo, bigtiff, limits, &mut synr, |synr| {
+                    Ok(Rational(synr.read_u32()?, synr.read_u32()?))
                 })
-                .await
             }
             Type::SRATIONAL => {
-                self.decode_offset(self.count, bo, bigtiff, limits, reader, |reader| {
-                    async move {
-                        Ok(SRational(
-                            reader.read_i32().await?,
-                            reader.read_i32().await?,
-                        ))
-                    }
-                    .boxed()
+                self.decode_vals(self.count, bo, bigtiff, limits, &mut synr, |synr| {
+                    Ok(SRational(synr.read_i32()?, synr.read_i32()?))
                 })
-                .await
             }
-            Type::LONG8 => {
-                self.decode_offset(self.count, bo, bigtiff, limits, reader, |reader| {
-                    async move { Ok(UnsignedBig(reader.read_u64().await?)) }.boxed()
-                })
-                .await
-            }
-            Type::SLONG8 => {
-                self.decode_offset(self.count, bo, bigtiff, limits, reader, |reader| {
-                    async move { Ok(SignedBig(reader.read_i64().await?)) }.boxed()
-                })
-                .await
-            }
-            Type::IFD => {
-                self.decode_offset(self.count, bo, bigtiff, limits, reader, |reader| {
-                    async move { Ok(Ifd(reader.read_u32().await?)) }.boxed()
-                })
-                .await
-            }
-            Type::IFD8 => {
-                self.decode_offset(self.count, bo, bigtiff, limits, reader, |reader| {
-                    async move { Ok(IfdBig(reader.read_u64().await?)) }.boxed()
-                })
-                .await
-            }
+            Type::LONG8 => self.decode_vals(self.count, bo, bigtiff, limits, &mut synr, |synr| {
+                Ok(UnsignedBig(synr.read_u64()?))
+            }),
+            Type::SLONG8 => self.decode_vals(self.count, bo, bigtiff, limits, &mut synr, |synr| {
+                Ok(SignedBig(synr.read_i64()?))
+            }),
+            Type::IFD => self.decode_vals(self.count, bo, bigtiff, limits, &mut synr, |synr| {
+                Ok(Ifd(synr.read_u32()?))
+            }),
+            Type::IFD8 => self.decode_vals(self.count, bo, bigtiff, limits, &mut synr, |synr| {
+                Ok(IfdBig(synr.read_u64()?))
+            }),
             Type::UNDEFINED => {
-                self.decode_offset(self.count, bo, bigtiff, limits, reader, |reader| {
-                    async move {
-                        let mut buf = [0; 1];
-                        reader.read_exact(&mut buf).await?;
-                        Ok(Byte(buf[0]))
-                    }
-                    .boxed()
+                self.decode_vals(self.count, bo, bigtiff, limits, &mut synr, |synr| {
+                    let mut buf = [0; 1];
+                    synr.read_exact(&mut buf)?;
+                    Ok(Byte(buf[0]))
                 })
-                .await
             }
             Type::ASCII => {
                 let n = usize::try_from(self.count)?;
-                if n > limits.decoding_buffer_size {
-                    return Err(TiffError::LimitsExceeded);
-                }
-
-                if bigtiff {
-                    reader.goto_offset(self.r(bo).read_u64()?).await?
-                } else {
-                    reader.goto_offset(offset).await?
-                }
-
-                let mut out = vec![0; n];
-                reader.read_exact(&mut out).await?;
+                let mut out = vec![0;n];
+                synr.read_exact(&mut out)?;
                 // Strings may be null-terminated, so we trim anything downstream of the null byte
                 if let Some(first) = out.iter().position(|&b| b == 0) {
                     out.truncate(first);
@@ -494,6 +447,160 @@ impl Entry {
                 Ok(Ascii(String::from_utf8(out)?))
             }
         }
+        // Case 4: there is more than one value, and it doesn't fit in the offset field.
+        // Async help found here: https://users.rust-lang.org/t/function-that-takes-an-async-closure/61663
+        // match self.type_ {
+        //     // TODO check if this could give wrong results
+        //     // at a different endianess of file/computer.
+        //     Type::BYTE => {
+        //         self.decode_offset(self.count, bo, bigtiff, limits, reader, |reader| {
+        //             async move {
+        //                 let mut buf = [0; 1];
+        //                 reader.read_exact(&mut buf).await?;
+        //                 Ok(UnsignedBig(u64::from(buf[0])))
+        //             }
+        //             .boxed()
+        //         })
+        //         .await
+        //     }
+        //     Type::SBYTE => {
+        //         self.decode_offset(self.count, bo, bigtiff, limits, reader, |reader| {
+        //             async move { Ok(SignedBig(i64::from(reader.read_i8().await?))) }.boxed()
+        //         })
+        //         .await
+        //     }
+        //     Type::SHORT => {
+        //         self.decode_offset(self.count, bo, bigtiff, limits, reader, |reader| {
+        //             async move { Ok(UnsignedBig(u64::from(reader.read_u16().await?))) }.boxed()
+        //         })
+        //         .await
+        //     }
+        //     Type::SSHORT => {
+        //         self.decode_offset(self.count, bo, bigtiff, limits, reader, |reader| {
+        //             async move { Ok(SignedBig(i64::from(reader.read_i16().await?))) }.boxed()
+        //         })
+        //         .await
+        //     }
+        //     Type::LONG => {
+        //         self.decode_offset(self.count, bo, bigtiff, limits, reader, |reader| {
+        //             async move { Ok(Unsigned(reader.read_u32().await?)) }.boxed()
+        //         })
+        //         .await
+        //     }
+        //     Type::SLONG => {
+        //         self.decode_offset(self.count, bo, bigtiff, limits, reader, |reader| {
+        //             async move { Ok(Signed(reader.read_i32().await?)) }.boxed()
+        //         })
+        //         .await
+        //     }
+        //     Type::FLOAT => {
+        //         self.decode_offset(self.count, bo, bigtiff, limits, reader, |reader| {
+        //             async move { Ok(Float(reader.read_f32().await?)) }.boxed()
+        //         })
+        //         .await
+        //     }
+        //     Type::DOUBLE => {
+        //         self.decode_offset(self.count, bo, bigtiff, limits, reader, |reader| {
+        //             async move { Ok(Double(reader.read_f64().await?)) }.boxed()
+        //         })
+        //         .await
+        //     }
+        //     Type::RATIONAL => {
+        //         self.decode_offset(self.count, bo, bigtiff, limits, reader, |reader| {
+        //             async move { Ok(Rational(reader.read_u32().await?, reader.read_u32().await?)) }
+        //                 .boxed()
+        //         })
+        //         .await
+        //     }
+        //     Type::SRATIONAL => {
+        //         self.decode_offset(self.count, bo, bigtiff, limits, reader, |reader| {
+        //             async move {
+        //                 Ok(SRational(
+        //                     reader.read_i32().await?,
+        //                     reader.read_i32().await?,
+        //                 ))
+        //             }
+        //             .boxed()
+        //         })
+        //         .await
+        //     }
+        //     Type::LONG8 => {
+        //         self.decode_offset(self.count, bo, bigtiff, limits, reader, |reader| {
+        //             async move { Ok(UnsignedBig(reader.read_u64().await?)) }.boxed()
+        //         })
+        //         .await
+        //     }
+        //     Type::SLONG8 => {
+        //         self.decode_offset(self.count, bo, bigtiff, limits, reader, |reader| {
+        //             async move { Ok(SignedBig(reader.read_i64().await?)) }.boxed()
+        //         })
+        //         .await
+        //     }
+        //     Type::IFD => {
+        //         self.decode_offset(self.count, bo, bigtiff, limits, reader, |reader| {
+        //             async move { Ok(Ifd(reader.read_u32().await?)) }.boxed()
+        //         })
+        //         .await
+        //     }
+        //     Type::IFD8 => {
+        //         self.decode_offset(self.count, bo, bigtiff, limits, reader, |reader| {
+        //             async move { Ok(IfdBig(reader.read_u64().await?)) }.boxed()
+        //         })
+        //         .await
+        //     }
+        //     Type::UNDEFINED => {
+        //         self.decode_offset(self.count, bo, bigtiff, limits, reader, |reader| {
+        //             async move {
+        //                 let mut buf = [0; 1];
+        //                 reader.read_exact(&mut buf).await?;
+        //                 Ok(Byte(buf[0]))
+        //             }
+        //             .boxed()
+        //         })
+        //         .await
+        //     }
+        //     Type::ASCII => {
+        //         let n = usize::try_from(self.count)?;
+        //         if n > limits.decoding_buffer_size {
+        //             return Err(TiffError::LimitsExceeded);
+        //         }
+
+        //         if bigtiff {
+        //             reader.goto_offset(self.r(bo).read_u64()?).await?
+        //         } else {
+        //             reader.goto_offset(offset).await?
+        //         }
+
+        //         let mut out = vec![0; n];
+        //         reader.read_exact(&mut out).await?;
+        //         // Strings may be null-terminated, so we trim anything downstream of the null byte
+        //         if let Some(first) = out.iter().position(|&b| b == 0) {
+        //             out.truncate(first);
+        //         }
+        //         Ok(Ascii(String::from_utf8(out)?))
+        //     }
+        // }
+    }
+
+    fn decode_vals<R: Read, F: Fn(&mut SmartReader<R>) -> TiffResult<Value>> (
+        &self,
+        value_count: u64,
+        bo: ByteOrder,
+        bigtiff: bool,
+        limits: &super::Limits,
+        reader: &mut SmartReader<R>,
+        decode_fn: F,
+    ) -> TiffResult<Value>{
+        let value_count = usize::try_from(value_count)?;
+        if value_count > limits.decoding_buffer_size / std::mem::size_of::<Value>() {
+            return Err(TiffError::LimitsExceeded);
+        }
+
+        let mut v = Vec::with_capacity(value_count);
+        for _ in 0..value_count {
+            v.push(decode_fn(reader)?);
+        }
+        Ok(List(v))
     }
 
     /// Goes to offset and decodes all values there

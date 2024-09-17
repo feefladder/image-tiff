@@ -22,6 +22,7 @@ use futures::{io::Empty, AsyncRead, AsyncReadExt, AsyncSeek};
 use std::{
     io::{Cursor, Read},
     sync::Arc,
+    collections::HashMap,
 };
 
 #[derive(Debug)]
@@ -138,8 +139,9 @@ pub(crate) struct AsyncImage {
     pub planar_config: PlanarConfiguration,
     pub strip_decoder: Option<StripDecodeState>,
     pub tile_attributes: Option<TileAttributes>,
-    pub chunk_offsets: Vec<u64>,
-    pub chunk_bytes: Vec<u64>,
+    pub chunk_offsets: HashMap<u32, u64>,
+    pub chunk_bytes: HashMap<u32, u64>,
+    pub n_chunks: u32,
 }
 
 impl AsyncImage {
@@ -280,6 +282,7 @@ impl AsyncImage {
         let chunk_bytes;
         let strip_decoder;
         let tile_attributes;
+        let n_chunks;
         match (
             ifd.contains_key(&Tag::StripByteCounts),
             ifd.contains_key(&Tag::StripOffsets),
@@ -293,12 +296,12 @@ impl AsyncImage {
                 tag_reader
                     .find_tag(Tag::StripOffsets).await?
                     .unwrap()
-                    .into_u64_vec()?;
+                    .into_u64_hashmap()?;
                 chunk_bytes = //ifd[&Tag::StripByteCounts];
                 tag_reader
                 .find_tag(Tag::StripByteCounts).await?
                 .unwrap()
-                .into_u64_vec()?;
+                .into_u64_hashmap()?;
                 let rows_per_strip = tag_reader
                     .find_tag(Tag::RowsPerStrip)
                     .await?
@@ -317,8 +320,10 @@ impl AsyncImage {
                         TiffFormatError::InconsistentSizesEncountered,
                     ));
                 }
+                n_chunks = u32::try_from(chunk_offsets.len()).unwrap();
             }
             (false, false, true, true) => {
+                println!("tiled tiff");
                 chunk_type = ChunkType::Tile;
 
                 let tile_width =
@@ -341,24 +346,27 @@ impl AsyncImage {
                 });
                 chunk_offsets = //ifd[&Tag::TileOffsets];
                 tag_reader
-                    .find_tag(Tag::TileOffsets).await?
+                    .find_tag_maybe_val(Tag::TileOffsets)?
                     .unwrap()
-                    .into_u64_vec()?;
+                    .into_u64_hashmap()?;
                 chunk_bytes = //ifd[&Tag::TileByteCounts];
                 tag_reader
-                    .find_tag(Tag::TileByteCounts).await?
+                    .find_tag_maybe_val(Tag::TileByteCounts)?
                     .unwrap()
-                    .into_u64_vec()?;
+                    .into_u64_hashmap()?;
 
                 let tile = tile_attributes.as_ref().unwrap();
-                if chunk_offsets.len() != chunk_bytes.len()
-                    || chunk_offsets.len() as usize
-                        != tile.tiles_down() * tile.tiles_across() * planes as usize
+                if ifd.get(&Tag::TileOffsets).unwrap().count() != ifd.get(&Tag::TileByteCounts).unwrap().count()
+                || ifd.get(&Tag::TileOffsets).unwrap().count() as usize != tile.tiles_down() * tile.tiles_across() * planes as usize
+                // chunk_offsets.len() != chunk_bytes.len()
+                //     || chunk_offsets.len() as usize
+                //         != tile.tiles_down() * tile.tiles_across() * planes as usize
                 {
                     return Err(TiffError::FormatError(
                         TiffFormatError::InconsistentSizesEncountered,
                     ));
                 }
+                n_chunks = u32::try_from(ifd.get(&Tag::TileOffsets).unwrap().count()).unwrap();
             }
             (_, _, _, _) => {
                 return Err(TiffError::FormatError(
@@ -382,6 +390,7 @@ impl AsyncImage {
             planar_config,
             strip_decoder,
             tile_attributes,
+            n_chunks,
             chunk_offsets: chunk_offsets,
             chunk_bytes: chunk_bytes,
         })
@@ -552,20 +561,24 @@ impl AsyncImage {
         }
     }
 
+    /// Get range within file where the chunk resides
+    /// 
     pub(crate) fn chunk_file_range(&self, chunk: u32) -> TiffResult<(u64, u64)> {
         let file_offset = self
             .chunk_offsets
-            .get(chunk as usize)
-            .ok_or(TiffError::FormatError(
-                TiffFormatError::InconsistentSizesEncountered,
-            ))?;
+            .get(&chunk)
+            .ok_or( TiffError::UsageError(UsageError::InvalidChunkIndex(chunk))
+                // TiffError::FormatError(
+                // TiffFormatError::InconsistentSizesEncountered,
+            )?;
 
         let compressed_bytes =
             self.chunk_bytes
-                .get(chunk as usize)
-                .ok_or(TiffError::FormatError(
-                    TiffFormatError::InconsistentSizesEncountered,
-                ))?;
+                .get(&chunk)
+                .ok_or( TiffError::UsageError(UsageError::InvalidChunkIndex(chunk))
+                    // TiffError::FormatError(
+                    // TiffFormatError::InconsistentSizesEncountered,
+                )?;
 
         Ok((*file_offset, *compressed_bytes))
     }
@@ -687,7 +700,7 @@ impl AsyncImage {
         }
 
         let compressed_bytes = self.chunk_bytes
-                .get(chunk_index as usize)
+                .get(&chunk_index)
                 .ok_or(TiffError::FormatError(
                     TiffFormatError::InconsistentSizesEncountered,
                 ))?;//match &self.chunk_bytes {

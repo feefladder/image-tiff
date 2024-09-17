@@ -39,8 +39,8 @@ pub mod tag_reader;
 pub trait RangeReader {
     async fn read_range(
         &mut self,
-        bytes_start: usize,
-        bytes_end: usize,
+        bytes_start: u64,
+        bytes_end: u64,
     ) -> futures::io::Result<Vec<u8>>;
 }
 
@@ -48,11 +48,11 @@ pub trait RangeReader {
 impl<R: AsyncRead + AsyncSeek + Unpin + Send> RangeReader for R {
     async fn read_range(
         &mut self,
-        bytes_start: usize,
-        bytes_end: usize,
+        bytes_start: u64,
+        bytes_end: u64,
     ) -> futures::io::Result<Vec<u8>> {
         let length = bytes_end - bytes_start;
-        let mut buffer = vec![0; length];
+        let mut buffer = vec![0; length.try_into().unwrap()];
 
         // Seek to the start position
         self.seek(SeekFrom::Start(bytes_start as u64)).await?;
@@ -143,8 +143,9 @@ impl<R: AsyncRead + AsyncSeek + RangeReader + Unpin + Send> Decoder<R> {
                 planar_config: PlanarConfiguration::Chunky,
                 strip_decoder: None,
                 tile_attributes: None,
-                chunk_offsets: Vec::new(),
-                chunk_bytes: Vec::new(),
+                n_chunks: 0,
+                chunk_offsets: HashMap::new(),
+                chunk_bytes: HashMap::new(),
             },
         };
 
@@ -498,7 +499,44 @@ impl<R: AsyncRead + AsyncSeek + RangeReader + Unpin + Send> Decoder<R> {
     /// Number of tiles in image
     pub fn tile_count(&mut self) -> TiffResult<u32> {
         self.check_chunk_type(ChunkType::Tile)?;
-        Ok(u32::try_from(self.image().chunk_offsets.len())?)
+        Ok(u32::try_from(self.image().ifd.as_ref().unwrap().get(&Tag::TileOffsets).unwrap().count())?)
+    }
+
+    pub async fn chunk_file_range(&mut self, chunk_index: u32) -> TiffResult<(u64, u64)> {
+        let offset; let length;
+        match self.image.chunk_file_range(chunk_index) {
+            Err(TiffError::UsageError(UsageError::InvalidChunkIndex(i))) => {
+                
+                offset = match self.image.ifd.as_ref().unwrap().get(&Tag::TileOffsets) {
+                    None => {return Err(TiffError::FormatError(TiffFormatError::RequiredTagEmpty(Tag::TileOffsets)));}
+                    Some(entry) => {
+                        // self.image.chunk_offsets = entry.val(&self.limits, self.bigtiff, &mut self.reader).await?.into_u64_hashmap()?;
+                        // let val = self.image.chunk_offsets.get(&chunk_index).unwrap();
+                        let v = entry.nth_val(chunk_index.into(), &self.limits, self.bigtiff, &mut self.reader).await?.into_u64()?;
+                        self.image.chunk_offsets.insert(chunk_index, v);
+                        // println!("bla {:?}-{:?}={:?}", val, v, val.checked_sub(v));
+                        Some(v)
+                    }
+                }.unwrap();
+                length = match self.image.ifd.as_ref().unwrap().get(&Tag::TileByteCounts) {
+                    None => {return Err(TiffError::FormatError(TiffFormatError::RequiredTagEmpty(Tag::TileByteCounts)));}
+                    Some(entry) => {
+                        // self.image.chunk_bytes = entry.val(&self.limits, self.bigtiff, &mut self.reader).await?.into_u64_hashmap()?;
+                        // let val = self.image.chunk_bytes.get(&chunk_index).unwrap();
+                        let v = entry.nth_val(chunk_index.into(), &self.limits, self.bigtiff, &mut self.reader).await?.into_u64()?;
+                        self.image.chunk_bytes.insert(chunk_index, v);
+                        // println!("bla {:?}-{:?}={:?}", val, v, val.checked_sub(v));
+                        Some(v)
+                    }
+                }.unwrap();
+                // self.image.chunk_offsets.insert(chunk_index, offset);
+                // self.image.chunk_bytes.insert(chunk_index, length);
+            }
+            Ok((off, le)) => {offset=off;length=le;}
+            Err(e) => {return Err(e);}
+        }
+        println!("reading chunk: {:?}-{:?}", offset, length);
+        Ok((offset, length))
     }
 
     pub async fn read_chunk_to_buffer(
@@ -507,8 +545,9 @@ impl<R: AsyncRead + AsyncSeek + RangeReader + Unpin + Send> Decoder<R> {
         chunk_index: u32,
         output_width: usize,
     ) -> TiffResult<()> {
-        let (offset,  length) = self.image.chunk_file_range(chunk_index)?;
-        let v = self.reader.read_range(offset.try_into()?, (offset + length).try_into()?).await?;
+        
+        let (offset,  length) = self.chunk_file_range(chunk_index).await?;
+        let v = self.reader.read_range(offset, offset + length).await?;
 
         let byte_order = self.reader.byte_order;
 
@@ -640,14 +679,14 @@ impl<R: AsyncRead + AsyncSeek + RangeReader + Unpin + Send> Decoder<R> {
         }
 
         // in planar config, an image has chunks/n_bands chunks 
-        let image_chunks = self.image().chunk_offsets.len() / self.image().strips_per_pixel();
+        let image_chunks = self.image().n_chunks as usize / self.image().strips_per_pixel();
         // For multi-band images, only the first band is read.
         // Possible improvements:
         // * pass requested band as parameter
         // * collect bands to a RGB encoding result in case of RGB bands
         for chunk in 0..image_chunks {
-            let (offset,  length) = self.image.chunk_file_range(chunk.try_into().unwrap())?;
-            let v = self.reader.read_range(offset.try_into()?, (offset + length).try_into()?).await?;
+            let (offset,  length) = self.chunk_file_range(chunk.try_into().unwrap()).await?;
+            let v = self.reader.read_range(offset, offset + length).await?;
             let mut reader = std::io::Cursor::new(v);
             // self.goto_offset_u64(self.image().chunk_offsets[chunk]).await?;
 
